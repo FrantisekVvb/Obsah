@@ -21,7 +21,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       gap: 12px;
       height: 100vh;
       height: 100dvh;
@@ -58,6 +58,12 @@
     #verify-btn:hover {
       border-color: #9ca3af;
       background: #f9fafb;
+    }
+
+    .toolbar-btn.is-active {
+      border-color: #3b50f0;
+      background: #f4f6ff;
+      color: #1e2a8a;
     }
 
     .area-quiz {
@@ -146,6 +152,100 @@
       color: #991b1b;
     }
 
+    #tile-stack {
+      position: relative;
+      flex-shrink: 0;
+      width: calc(258px * 1.56);
+      height: calc(110px * 1.56);
+      margin: 0 auto;
+    }
+
+    #tile-stack .stack-tile {
+      position: absolute;
+      touch-action: none;
+      user-select: none;
+    }
+
+    #tile-stack .stack-tile[data-type="dm2"] {
+      left: 0;
+      top: calc(0.5px * 1.56);
+      width: calc(99px * 1.56);
+      height: calc(99px * 1.56);
+    }
+
+    #tile-stack .stack-tile[data-type="cm2"] {
+      left: calc(174px * 1.56);
+      top: calc(90.5px * 1.56);
+      width: calc(9.9px * 1.56);
+      height: calc(9.9px * 1.56);
+    }
+
+    #tile-stack .stack-tile[data-type="mm2"] {
+      left: calc(245.75px * 1.56);
+      top: calc(99.25px * 1.56);
+      width: calc(24px * 1.56);
+      height: calc(24px * 1.56);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .stack-visual-dm2,
+    .stack-visual-cm2,
+    .stack-visual-mm2 {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+    }
+
+    .stack-visual-dm2 {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #9fffad;
+      border: 1px solid #0f880d;
+      color: #0f880d;
+      font-size: calc(10px * 1.56);
+      font-weight: 500;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .stack-visual-cm2 {
+      background: #9fa5ff;
+      border: 1px solid #110d88;
+    }
+
+    .stack-visual-mm2 {
+      width: calc(0.99px * 1.56);
+      height: calc(0.99px * 1.56);
+      background: #ff9f9f;
+      border: 0.5px solid #880d0d;
+    }
+
+    .stack-label {
+      position: absolute;
+      left: 50%;
+      bottom: 100%;
+      transform: translateX(-50%);
+      margin-bottom: 2px;
+      font-size: calc(10px * 1.56);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .stack-label-dm2 {
+      color: #0f880d;
+    }
+
+    .stack-label-cm2 {
+      color: #110d88;
+    }
+
+    .stack-label-mm2 {
+      color: #880d0d;
+    }
+
     #diagram-wrap {
       flex: 1 1 auto;
       min-height: 0;
@@ -159,6 +259,14 @@
       display: block;
       touch-action: none;
       user-select: none;
+    }
+
+    #canvas {
+      cursor: grab;
+    }
+
+    #canvas.is-dragging {
+      cursor: grabbing;
     }
 
     .stack-tile {
@@ -188,7 +296,8 @@
 <body>
   <main id="stage">
     <div class="ui-overlay">
-      <button id="new-canvas-btn" class="toolbar-btn" type="button">Nový náhodný obdélník</button>
+      <button id="new-canvas-btn" class="toolbar-btn" type="button">Nový obdélník</button>
+      <button id="free-surface-btn" class="toolbar-btn" type="button">Volná plocha</button>
       <div class="area-quiz">
         <span class="area-quiz-label">Obsah obdélníku je</span>
         <input id="area-value" type="number" min="0" step="any" inputmode="decimal" aria-label="Hodnota obsahu" />
@@ -200,34 +309,30 @@
         <button id="verify-btn" type="button">Ověřit</button>
       </div>
     </div>
+    <div id="tile-stack" aria-label="Zásobník dlaždic">
+      <div class="stack-tile" data-type="dm2">
+        <div class="stack-visual-dm2">1 dm²</div>
+      </div>
+      <div class="stack-tile" data-type="cm2">
+        <span class="stack-label stack-label-cm2">1 cm²</span>
+        <div class="stack-visual-cm2"></div>
+      </div>
+      <div class="stack-tile" data-type="mm2">
+        <span class="stack-label stack-label-mm2">1 mm²</span>
+        <div class="stack-visual-mm2"></div>
+      </div>
+    </div>
     <div id="diagram-wrap">
     <svg id="diagram" width="844" height="563" viewBox="0 0 843.96 563.16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Obsah">
       <rect id="diagram-bg" width="843.96" height="563.16" fill="#ffffff"/>
       <g id="content" transform="scale(1.56)">
         <g id="static-layer">
-          <rect id="canvas" fill="#CACACA" stroke="black"/>
-          <g id="canvas-ticks"></g>
-          <g id="canvas-labels"></g>
-        </g>
-
-        <g id="tile-stack" aria-label="Zásobník dlaždic">
-          <g class="stack-tile" data-type="dm2" transform="translate(83.5, 0.5)">
-            <rect class="stack-visual" width="99" height="99" fill="#9FFFAD" stroke="#0F880D"/>
-            <rect class="stack-hit" x="0" y="0" width="99" height="99"/>
-            <text x="49.5" y="54" text-anchor="middle" fill="#0F880D" font-size="10" font-family="system-ui, sans-serif">1 dm²</text>
-          </g>
-          <g class="stack-tile" data-type="cm2" transform="translate(257.5, 90.5)">
-            <rect class="stack-visual" width="9.9" height="9.9" fill="#9FA5FF" stroke="#110D88"/>
-            <rect class="stack-hit" x="-8" y="-8" width="25" height="25"/>
-            <text x="4.95" y="-4" text-anchor="middle" fill="#110D88" font-size="10" font-family="system-ui, sans-serif">1 cm²</text>
-          </g>
-          <g class="stack-tile" data-type="mm2" transform="translate(329.25, 99.25)">
-            <rect class="stack-visual" width="0.99" height="0.99" fill="#FF9F9F" stroke="#880D0D" stroke-width="0.5"/>
-            <rect class="stack-hit" x="-12" y="-12" width="24" height="24"/>
-            <text x="0.495" y="-4" text-anchor="middle" fill="#880D0D" font-size="10" font-family="system-ui, sans-serif">1 mm²</text>
+          <g id="canvas-group">
+            <rect id="canvas" x="0" y="0" fill="#CACACA" stroke="black"/>
+            <g id="canvas-ticks"></g>
+            <g id="canvas-labels"></g>
           </g>
         </g>
-
         <g id="placed-tiles"></g>
       </g>
     </svg>

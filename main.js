@@ -1,14 +1,19 @@
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 const DM = 99;
-const CANVAS = { x: 5.5, y: 135.5, w: DM * 5, h: DM * 2 };
+const CANVAS = { w: DM * 5, h: DM * 2 };
+const DEFAULT_CANVAS_POSITION = { x: 5.5, y: 8 };
+const CANVAS_POSITION_MARGIN = 8;
 const CANVAS_SCALE = 1.56;
-const CANVAS_MIN_DM = 2;
+const CANVAS_MIN_DM = 1;
+const CANVAS_MAX_DM_W = 6;
+const CANVAS_MAX_DM_H = 3;
 const TOOLBAR_RESERVE = 48;
+const STACK_RESERVE = 172;
 const MIN_INNER_WIDTH = 541;
 const CANVAS_RIGHT_MARGIN = 40;
 const CANVAS_BOTTOM_MARGIN = 35;
-const MIN_INNER_HEIGHT = 135.5 + CANVAS_BOTTOM_MARGIN;
+const MIN_INNER_HEIGHT = CANVAS_POSITION_MARGIN + CANVAS_BOTTOM_MARGIN;
 const VIEWPORT_SAFETY = 0.92;
 const MIN_FIT_SCALE = 0.75;
 const SNAP_THRESHOLD = 8;
@@ -20,8 +25,6 @@ const TILE_TYPES = {
     fill: "#9FFFAD",
     stroke: "#0F880D",
     strokeWidth: 1,
-    stackX: 83.5,
-    stackY: 0.5,
   },
   cm2: {
     w: DM / 10,
@@ -29,8 +32,6 @@ const TILE_TYPES = {
     fill: "#9FA5FF",
     stroke: "#110D88",
     strokeWidth: 1,
-    stackX: 257.5,
-    stackY: 90.5,
   },
   mm2: {
     w: DM / 100,
@@ -38,8 +39,6 @@ const TILE_TYPES = {
     fill: "#FF9F9F",
     stroke: "#880D0D",
     strokeWidth: 0.5,
-    stackX: 329.25,
-    stackY: 99.25,
     hitSize: 24,
   },
 };
@@ -49,6 +48,8 @@ const diagramBg = document.getElementById("diagram-bg");
 const diagramWrap = document.getElementById("diagram-wrap");
 const stage = document.getElementById("stage");
 const newCanvasBtn = document.getElementById("new-canvas-btn");
+const freeSurfaceBtn = document.getElementById("free-surface-btn");
+const areaQuiz = document.querySelector(".area-quiz");
 const areaValueInput = document.getElementById("area-value");
 const areaUnitSelect = document.getElementById("area-unit");
 const verifyBtn = document.getElementById("verify-btn");
@@ -56,11 +57,28 @@ const content = document.getElementById("content");
 const placedTilesLayer = document.getElementById("placed-tiles");
 const tileStack = document.getElementById("tile-stack");
 const canvasElement = document.getElementById("canvas");
+const canvasGroup = document.getElementById("canvas-group");
 const canvasTicks = document.getElementById("canvas-ticks");
 const canvasLabels = document.getElementById("canvas-labels");
+const staticLayer = document.getElementById("static-layer");
 
 let dragState = null;
 let tileCounter = 0;
+let isFreeSurfaceMode = false;
+let canvasPosition = { ...DEFAULT_CANVAS_POSITION };
+
+function getCanvasBounds() {
+  return {
+    x: canvasPosition.x,
+    y: canvasPosition.y,
+    w: CANVAS.w,
+    h: CANVAS.h,
+  };
+}
+
+function applyCanvasPosition() {
+  canvasGroup.setAttribute("transform", `translate(${canvasPosition.x}, ${canvasPosition.y})`);
+}
 
 function getLocalPoint(clientX, clientY) {
   const point = diagram.createSVGPoint();
@@ -83,13 +101,14 @@ function setTranslate(element, x, y) {
 }
 
 function isTileOnCanvas(x, y, w, h) {
+  const bounds = getCanvasBounds();
   const cx = x + w / 2;
   const cy = y + h / 2;
   return (
-    cx >= CANVAS.x &&
-    cx <= CANVAS.x + CANVAS.w &&
-    cy >= CANVAS.y &&
-    cy <= CANVAS.y + CANVAS.h
+    cx >= bounds.x &&
+    cx <= bounds.x + bounds.w &&
+    cy >= bounds.y &&
+    cy <= bounds.y + bounds.h
   );
 }
 
@@ -103,12 +122,16 @@ function collectSnapLines(excludeElement) {
   const xLines = [];
   const yLines = [];
 
-  for (let i = 0; i <= CANVAS.w / DM; i += 1) {
-    xLines.push(CANVAS.x + i * DM);
-  }
+  if (!isFreeSurfaceMode) {
+    const bounds = getCanvasBounds();
 
-  for (let i = 0; i <= CANVAS.h / DM; i += 1) {
-    yLines.push(CANVAS.y + i * DM);
+    for (let i = 0; i <= bounds.w / DM; i += 1) {
+      xLines.push(bounds.x + i * DM);
+    }
+
+    for (let i = 0; i <= bounds.h / DM; i += 1) {
+      yLines.push(bounds.y + i * DM);
+    }
   }
 
   placedTilesLayer.querySelectorAll(".placed-tile").forEach((tile) => {
@@ -196,16 +219,52 @@ function bringToFront(element) {
   placedTilesLayer.appendChild(element);
 }
 
-function startDragFromStack(type, localX, localY) {
+function startDragCanvas(localX, localY) {
+  canvasElement.classList.add("is-dragging");
+
+  dragState = {
+    kind: "canvas",
+    offsetX: localX - canvasPosition.x,
+    offsetY: localY - canvasPosition.y,
+    pointerId: null,
+  };
+}
+
+function moveCanvasTo(x, y) {
+  const dx = x - canvasPosition.x;
+  const dy = y - canvasPosition.y;
+
+  if (dx === 0 && dy === 0) {
+    return;
+  }
+
+  canvasPosition.x = x;
+  canvasPosition.y = y;
+  applyCanvasPosition();
+
+  placedTilesLayer.querySelectorAll(".placed-tile").forEach((tile) => {
+    const position = parseTranslate(tile);
+    setTranslate(tile, position.x + dx, position.y + dy);
+  });
+
+  updateViewBox();
+}
+
+function startDragFromStack(type, clientX, clientY, targetElement) {
   const def = TILE_TYPES[type];
-  const tile = createPlacedTile(type, def.stackX, def.stackY);
+  const point = getLocalPoint(clientX, clientY);
+  const rect = targetElement.getBoundingClientRect();
+  const clickOffsetX = ((clientX - rect.left) / rect.width) * def.w;
+  const clickOffsetY = ((clientY - rect.top) / rect.height) * def.h;
+  const tile = createPlacedTile(type, point.x - clickOffsetX, point.y - clickOffsetY);
   bringToFront(tile);
   tile.classList.add("is-dragging");
 
   dragState = {
+    kind: "tile",
     element: tile,
-    offsetX: localX - def.stackX,
-    offsetY: localY - def.stackY,
+    offsetX: clickOffsetX,
+    offsetY: clickOffsetY,
     pointerId: null,
   };
 }
@@ -216,6 +275,7 @@ function startDragPlacedTile(element, localX, localY) {
   element.classList.add("is-dragging");
 
   dragState = {
+    kind: "tile",
     element,
     offsetX: localX - position.x,
     offsetY: localY - position.y,
@@ -225,6 +285,11 @@ function startDragPlacedTile(element, localX, localY) {
 
 function updateDrag(localX, localY) {
   if (!dragState) {
+    return;
+  }
+
+  if (dragState.kind === "canvas") {
+    moveCanvasTo(localX - dragState.offsetX, localY - dragState.offsetY);
     return;
   }
 
@@ -238,15 +303,27 @@ function endDrag() {
     return;
   }
 
+  if (dragState.kind === "canvas") {
+    canvasElement.classList.remove("is-dragging");
+    dragState = null;
+    return;
+  }
+
   const { element } = dragState;
   const def = TILE_TYPES[element.dataset.type];
   const position = parseTranslate(element);
-  const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
 
-  if (!isTileOnCanvas(snapped.x, snapped.y, def.w, def.h)) {
-    element.remove();
-  } else {
+  if (isFreeSurfaceMode) {
+    const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
     setTranslate(element, snapped.x, snapped.y);
+  } else {
+    const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
+
+    if (!isTileOnCanvas(snapped.x, snapped.y, def.w, def.h)) {
+      element.remove();
+    } else {
+      setTranslate(element, snapped.x, snapped.y);
+    }
   }
 
   element.classList.remove("is-dragging");
@@ -261,8 +338,20 @@ tileStack.addEventListener("pointerdown", (event) => {
 
   event.preventDefault();
   const type = stackTile.dataset.type;
+  startDragFromStack(type, event.clientX, event.clientY, stackTile);
+  dragState.pointerId = event.pointerId;
+  diagram.setPointerCapture(event.pointerId);
+});
+
+canvasElement.addEventListener("pointerdown", (event) => {
+  if (isFreeSurfaceMode || event.target !== canvasElement) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
   const point = getLocalPoint(event.clientX, event.clientY);
-  startDragFromStack(type, point.x, point.y);
+  startDragCanvas(point.x, point.y);
   dragState.pointerId = event.pointerId;
   diagram.setPointerCapture(event.pointerId);
 });
@@ -327,12 +416,45 @@ function createLabel(text, x, y, anchor = "middle") {
   return label;
 }
 
+function getWorkSurfaceBounds() {
+  const available = getAvailableDiagramSize();
+
+  return {
+    w: Math.max(MIN_INNER_WIDTH, (available.width / CANVAS_SCALE) * VIEWPORT_SAFETY),
+    h: Math.max(MIN_INNER_HEIGHT, (available.height / CANVAS_SCALE) * VIEWPORT_SAFETY),
+  };
+}
+
+function getCenteredCanvasX(widthDm, surfaceWidth = getWorkSurfaceBounds().w) {
+  const rectW = widthDm * DM;
+  const centeredX = (surfaceWidth - rectW) / 2;
+  const maxX = Math.max(CANVAS_POSITION_MARGIN, surfaceWidth - rectW - CANVAS_RIGHT_MARGIN);
+
+  return Math.min(Math.max(CANVAS_POSITION_MARGIN, centeredX), maxX);
+}
+
 function getInnerWidth(widthDm) {
-  return Math.max(MIN_INNER_WIDTH, CANVAS.x + widthDm * DM + CANVAS_RIGHT_MARGIN);
+  const surface = getWorkSurfaceBounds();
+  const rectW = widthDm * DM;
+  const x = getCenteredCanvasX(widthDm, surface.w);
+
+  return Math.max(MIN_INNER_WIDTH, surface.w, x + rectW + CANVAS_RIGHT_MARGIN);
 }
 
 function getInnerHeight(heightDm) {
-  return Math.max(MIN_INNER_HEIGHT, CANVAS.y + heightDm * DM + CANVAS_BOTTOM_MARGIN);
+  return Math.max(
+    MIN_INNER_HEIGHT,
+    canvasPosition.y + heightDm * DM + CANVAS_BOTTOM_MARGIN,
+  );
+}
+
+function randomizeCanvasPosition(widthDm, heightDm) {
+  const surface = getWorkSurfaceBounds();
+  const rectH = heightDm * DM;
+  const maxY = Math.max(CANVAS_POSITION_MARGIN, surface.h - rectH - CANVAS_BOTTOM_MARGIN);
+
+  canvasPosition.x = getCenteredCanvasX(widthDm, surface.w);
+  canvasPosition.y = randomInt(CANVAS_POSITION_MARGIN, maxY);
 }
 
 function getNaturalSize(widthDm, heightDm) {
@@ -348,11 +470,12 @@ function getAvailableDiagramSize() {
   const toolbar = document.querySelector(".ui-overlay");
   const stageRect = stage.getBoundingClientRect();
   const toolbarHeight = toolbar ? toolbar.getBoundingClientRect().height : TOOLBAR_RESERVE;
+  const stackHeight = tileStack ? tileStack.getBoundingClientRect().height : STACK_RESERVE;
   const stageGap = 12;
 
   return {
     width: Math.max(200, stageRect.width),
-    height: Math.max(200, stageRect.height - toolbarHeight - stageGap),
+    height: Math.max(200, stageRect.height - toolbarHeight - stackHeight - stageGap * 2),
   };
 }
 
@@ -370,7 +493,7 @@ function getMaxCanvasDm() {
   let maxWidthDm = CANVAS_MIN_DM;
   let maxHeightDm = CANVAS_MIN_DM;
 
-  for (let decimeters = CANVAS_MIN_DM; decimeters <= 20; decimeters += 1) {
+  for (let decimeters = CANVAS_MIN_DM; decimeters <= CANVAS_MAX_DM_W; decimeters += 1) {
     if (getFitScale(decimeters, CANVAS_MIN_DM) >= MIN_FIT_SCALE) {
       maxWidthDm = decimeters;
     } else {
@@ -378,7 +501,7 @@ function getMaxCanvasDm() {
     }
   }
 
-  for (let decimeters = CANVAS_MIN_DM; decimeters <= 20; decimeters += 1) {
+  for (let decimeters = CANVAS_MIN_DM; decimeters <= CANVAS_MAX_DM_H; decimeters += 1) {
     if (getFitScale(maxWidthDm, decimeters) >= MIN_FIT_SCALE) {
       maxHeightDm = decimeters;
     } else {
@@ -386,7 +509,10 @@ function getMaxCanvasDm() {
     }
   }
 
-  return { widthDm: maxWidthDm, heightDm: maxHeightDm };
+  return {
+    widthDm: Math.min(maxWidthDm, CANVAS_MAX_DM_W),
+    heightDm: Math.min(maxHeightDm, CANVAS_MAX_DM_H),
+  };
 }
 
 function clampCanvasSize(widthDm, heightDm) {
@@ -412,10 +538,39 @@ function clearPlacedTiles() {
   placedTilesLayer.replaceChildren();
 }
 
+function getFreeSurfaceInnerHeight() {
+  const available = getAvailableDiagramSize();
+  return Math.max(
+    MIN_INNER_HEIGHT,
+    (available.height / CANVAS_SCALE) * VIEWPORT_SAFETY,
+  );
+}
+
+function updateToolbarModeState() {
+  newCanvasBtn.classList.toggle("is-active", !isFreeSurfaceMode);
+  freeSurfaceBtn.classList.toggle("is-active", isFreeSurfaceMode);
+}
+
 function updateViewBox() {
-  const { widthDm, heightDm } = getCanvasSizeInDm();
-  const { outerWidth, outerHeight } = getNaturalSize(widthDm, heightDm);
-  const fitScale = getFitScale(widthDm, heightDm);
+  let innerWidth;
+  let innerHeight;
+
+  if (isFreeSurfaceMode) {
+    innerWidth = MIN_INNER_WIDTH;
+    innerHeight = getFreeSurfaceInnerHeight();
+  } else {
+    const { widthDm, heightDm } = getCanvasSizeInDm();
+    innerWidth = getInnerWidth(widthDm);
+    innerHeight = getInnerHeight(heightDm);
+  }
+
+  const outerWidth = innerWidth * CANVAS_SCALE;
+  const outerHeight = innerHeight * CANVAS_SCALE;
+  const available = getAvailableDiagramSize();
+  const fitScale = Math.min(
+    (available.width * VIEWPORT_SAFETY) / outerWidth,
+    (available.height * VIEWPORT_SAFETY) / outerHeight,
+  );
   const displayWidth = outerWidth * fitScale;
   const displayHeight = outerHeight * fitScale;
 
@@ -429,41 +584,63 @@ function updateViewBox() {
   diagramWrap.style.height = `${displayHeight}px`;
 }
 
+function setStaticLayerVisible(visible) {
+  staticLayer.style.visibility = visible ? "visible" : "hidden";
+}
+
+function enterFreeSurfaceMode() {
+  isFreeSurfaceMode = true;
+  setStaticLayerVisible(false);
+  areaQuiz.hidden = true;
+  clearPlacedTiles();
+  resetAreaQuiz();
+  updateToolbarModeState();
+  updateViewBox();
+}
+
+function exitFreeSurfaceMode() {
+  isFreeSurfaceMode = false;
+  setStaticLayerVisible(true);
+  areaQuiz.hidden = false;
+  updateToolbarModeState();
+}
+
 function renderCanvas() {
   canvasTicks.replaceChildren();
   canvasLabels.replaceChildren();
 
-  canvasElement.setAttribute("x", String(CANVAS.x));
-  canvasElement.setAttribute("y", String(CANVAS.y));
   canvasElement.setAttribute("width", String(CANVAS.w));
   canvasElement.setAttribute("height", String(CANVAS.h));
 
-  const tickTop = CANVAS.y - 5.5;
-  const tickBottom = CANVAS.y + 4.5;
-  const tickLeft = CANVAS.x - 5.5;
-  const tickRight = CANVAS.x + 4.5;
+  const tickTop = -5.5;
+  const tickBottom = 4.5;
+  const tickLeft = -5.5;
+  const tickRight = 4.5;
 
   for (let i = 1; i < CANVAS.w / DM; i += 1) {
-    const x = CANVAS.x + i * DM;
+    const x = i * DM;
     canvasTicks.appendChild(createLine(x, tickTop, x, tickBottom));
   }
 
   for (let i = 1; i < CANVAS.h / DM; i += 1) {
-    const y = CANVAS.y + i * DM;
+    const y = i * DM;
     canvasTicks.appendChild(createLine(tickLeft, y, tickRight, y));
   }
 
   const { widthDm, heightDm } = getCanvasSizeInDm();
-  canvasLabels.appendChild(createLabel(`${widthDm} dm`, CANVAS.x + CANVAS.w / 2, CANVAS.y + CANVAS.h + 13));
-  canvasLabels.appendChild(createLabel(`${heightDm} dm`, CANVAS.x + CANVAS.w + 13, CANVAS.y + CANVAS.h / 2, "start"));
+  canvasLabels.appendChild(createLabel(`${widthDm} dm`, CANVAS.w / 2, CANVAS.h + 13));
+  canvasLabels.appendChild(createLabel(`${heightDm} dm`, CANVAS.w + 13, CANVAS.h / 2, "start"));
 
+  applyCanvasPosition();
   updateViewBox();
 }
 
 function setCanvasSize(widthDm, heightDm) {
+  exitFreeSurfaceMode();
   const clamped = clampCanvasSize(widthDm, heightDm);
   CANVAS.w = clamped.widthDm * DM;
   CANVAS.h = clamped.heightDm * DM;
+  randomizeCanvasPosition(clamped.widthDm, clamped.heightDm);
   clearPlacedTiles();
   resetAreaQuiz();
   renderCanvas();
@@ -523,13 +700,29 @@ function generateRandomCanvas() {
   );
 }
 
+function clampCanvasPosition(widthDm, heightDm) {
+  const surface = getWorkSurfaceBounds();
+  const rectH = heightDm * DM;
+  const maxY = Math.max(CANVAS_POSITION_MARGIN, surface.h - rectH - CANVAS_BOTTOM_MARGIN);
+
+  canvasPosition.x = getCenteredCanvasX(widthDm, surface.w);
+  canvasPosition.y = Math.min(Math.max(CANVAS_POSITION_MARGIN, canvasPosition.y), maxY);
+  applyCanvasPosition();
+}
+
 function handleViewportChange() {
+  if (isFreeSurfaceMode) {
+    updateViewBox();
+    return;
+  }
+
   const current = getCanvasSizeInDm();
   const clamped = clampCanvasSize(current.widthDm, current.heightDm);
 
   if (clamped.widthDm !== current.widthDm || clamped.heightDm !== current.heightDm) {
     setCanvasSize(clamped.widthDm, clamped.heightDm);
   } else {
+    clampCanvasPosition(current.widthDm, current.heightDm);
     updateViewBox();
   }
 }
@@ -540,7 +733,9 @@ function initCanvas() {
 }
 
 initCanvas();
+updateToolbarModeState();
 newCanvasBtn.addEventListener("click", generateRandomCanvas);
+freeSurfaceBtn.addEventListener("click", enterFreeSurfaceMode);
 verifyBtn.addEventListener("click", verifyAreaAnswer);
 areaValueInput.addEventListener("input", resetAreaQuizFeedback);
 areaUnitSelect.addEventListener("change", resetAreaQuizFeedback);
