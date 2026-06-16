@@ -100,15 +100,14 @@ function setTranslate(element, x, y) {
   element.setAttribute("transform", `translate(${x}, ${y})`);
 }
 
-function isTileOnCanvas(x, y, w, h) {
-  const bounds = getCanvasBounds();
-  const cx = x + w / 2;
-  const cy = y + h / 2;
+function isPointerInStack(clientX, clientY) {
+  const stackRect = tileStack.getBoundingClientRect();
+
   return (
-    cx >= bounds.x &&
-    cx <= bounds.x + bounds.w &&
-    cy >= bounds.y &&
-    cy <= bounds.y + bounds.h
+    clientX >= stackRect.left &&
+    clientX <= stackRect.right &&
+    clientY >= stackRect.top &&
+    clientY <= stackRect.bottom
   );
 }
 
@@ -219,37 +218,6 @@ function bringToFront(element) {
   placedTilesLayer.appendChild(element);
 }
 
-function startDragCanvas(localX, localY) {
-  canvasElement.classList.add("is-dragging");
-
-  dragState = {
-    kind: "canvas",
-    offsetX: localX - canvasPosition.x,
-    offsetY: localY - canvasPosition.y,
-    pointerId: null,
-  };
-}
-
-function moveCanvasTo(x, y) {
-  const dx = x - canvasPosition.x;
-  const dy = y - canvasPosition.y;
-
-  if (dx === 0 && dy === 0) {
-    return;
-  }
-
-  canvasPosition.x = x;
-  canvasPosition.y = y;
-  applyCanvasPosition();
-
-  placedTilesLayer.querySelectorAll(".placed-tile").forEach((tile) => {
-    const position = parseTranslate(tile);
-    setTranslate(tile, position.x + dx, position.y + dy);
-  });
-
-  updateViewBox();
-}
-
 function startDragFromStack(type, clientX, clientY, targetElement) {
   const def = TILE_TYPES[type];
   const point = getLocalPoint(clientX, clientY);
@@ -288,42 +256,25 @@ function updateDrag(localX, localY) {
     return;
   }
 
-  if (dragState.kind === "canvas") {
-    moveCanvasTo(localX - dragState.offsetX, localY - dragState.offsetY);
-    return;
-  }
-
   const x = localX - dragState.offsetX;
   const y = localY - dragState.offsetY;
   placeTile(dragState.element, x, y);
 }
 
-function endDrag() {
+function endDrag(clientX, clientY) {
   if (!dragState) {
-    return;
-  }
-
-  if (dragState.kind === "canvas") {
-    canvasElement.classList.remove("is-dragging");
-    dragState = null;
     return;
   }
 
   const { element } = dragState;
   const def = TILE_TYPES[element.dataset.type];
   const position = parseTranslate(element);
+  const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
 
-  if (isFreeSurfaceMode) {
-    const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
-    setTranslate(element, snapped.x, snapped.y);
+  if (isPointerInStack(clientX, clientY)) {
+    element.remove();
   } else {
-    const snapped = snapPosition(position.x, position.y, def.w, def.h, element);
-
-    if (!isTileOnCanvas(snapped.x, snapped.y, def.w, def.h)) {
-      element.remove();
-    } else {
-      setTranslate(element, snapped.x, snapped.y);
-    }
+    setTranslate(element, snapped.x, snapped.y);
   }
 
   element.classList.remove("is-dragging");
@@ -339,19 +290,6 @@ tileStack.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   const type = stackTile.dataset.type;
   startDragFromStack(type, event.clientX, event.clientY, stackTile);
-  dragState.pointerId = event.pointerId;
-  diagram.setPointerCapture(event.pointerId);
-});
-
-canvasElement.addEventListener("pointerdown", (event) => {
-  if (isFreeSurfaceMode || event.target !== canvasElement) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  const point = getLocalPoint(event.clientX, event.clientY);
-  startDragCanvas(point.x, point.y);
   dragState.pointerId = event.pointerId;
   diagram.setPointerCapture(event.pointerId);
 });
@@ -388,7 +326,7 @@ function finishPointer(event) {
   if (diagram.hasPointerCapture(event.pointerId)) {
     diagram.releasePointerCapture(event.pointerId);
   }
-  endDrag();
+  endDrag(event.clientX, event.clientY);
 }
 
 diagram.addEventListener("pointerup", finishPointer);
@@ -420,8 +358,29 @@ function getWorkSurfaceBounds() {
   const available = getAvailableDiagramSize();
 
   return {
-    w: Math.max(MIN_INNER_WIDTH, (available.width / CANVAS_SCALE) * VIEWPORT_SAFETY),
-    h: Math.max(MIN_INNER_HEIGHT, (available.height / CANVAS_SCALE) * VIEWPORT_SAFETY),
+    w: Math.max(MIN_INNER_WIDTH, available.width / CANVAS_SCALE),
+    h: Math.max(MIN_INNER_HEIGHT, available.height / CANVAS_SCALE),
+  };
+}
+
+function getContentExtents() {
+  const surface = getWorkSurfaceBounds();
+  let innerWidth = surface.w;
+  let innerHeight = surface.h;
+
+  if (!isFreeSurfaceMode) {
+    const { widthDm, heightDm } = getCanvasSizeInDm();
+    const rectW = widthDm * DM;
+    const rectH = heightDm * DM;
+    const x = getCenteredCanvasX(widthDm, surface.w);
+
+    innerWidth = Math.max(innerWidth, x + rectW + CANVAS_RIGHT_MARGIN);
+    innerHeight = Math.max(innerHeight, canvasPosition.y + rectH + CANVAS_BOTTOM_MARGIN);
+  }
+
+  return {
+    innerWidth: Math.max(MIN_INNER_WIDTH, innerWidth),
+    innerHeight: Math.max(MIN_INNER_HEIGHT, innerHeight),
   };
 }
 
@@ -438,13 +397,16 @@ function getInnerWidth(widthDm) {
   const rectW = widthDm * DM;
   const x = getCenteredCanvasX(widthDm, surface.w);
 
-  return Math.max(MIN_INNER_WIDTH, surface.w, x + rectW + CANVAS_RIGHT_MARGIN);
+  return Math.max(surface.w, x + rectW + CANVAS_RIGHT_MARGIN);
 }
 
 function getInnerHeight(heightDm) {
+  const surface = getWorkSurfaceBounds();
+  const rectH = heightDm * DM;
+
   return Math.max(
-    MIN_INNER_HEIGHT,
-    canvasPosition.y + heightDm * DM + CANVAS_BOTTOM_MARGIN,
+    surface.h,
+    canvasPosition.y + rectH + CANVAS_BOTTOM_MARGIN,
   );
 }
 
@@ -538,50 +500,25 @@ function clearPlacedTiles() {
   placedTilesLayer.replaceChildren();
 }
 
-function getFreeSurfaceInnerHeight() {
-  const available = getAvailableDiagramSize();
-  return Math.max(
-    MIN_INNER_HEIGHT,
-    (available.height / CANVAS_SCALE) * VIEWPORT_SAFETY,
-  );
-}
-
 function updateToolbarModeState() {
   newCanvasBtn.classList.toggle("is-active", !isFreeSurfaceMode);
   freeSurfaceBtn.classList.toggle("is-active", isFreeSurfaceMode);
 }
 
 function updateViewBox() {
-  let innerWidth;
-  let innerHeight;
-
-  if (isFreeSurfaceMode) {
-    innerWidth = MIN_INNER_WIDTH;
-    innerHeight = getFreeSurfaceInnerHeight();
-  } else {
-    const { widthDm, heightDm } = getCanvasSizeInDm();
-    innerWidth = getInnerWidth(widthDm);
-    innerHeight = getInnerHeight(heightDm);
-  }
-
+  const { innerWidth, innerHeight } = getContentExtents();
   const outerWidth = innerWidth * CANVAS_SCALE;
   const outerHeight = innerHeight * CANVAS_SCALE;
   const available = getAvailableDiagramSize();
-  const fitScale = Math.min(
-    (available.width * VIEWPORT_SAFETY) / outerWidth,
-    (available.height * VIEWPORT_SAFETY) / outerHeight,
-  );
-  const displayWidth = outerWidth * fitScale;
-  const displayHeight = outerHeight * fitScale;
 
   diagram.setAttribute("viewBox", `0 0 ${outerWidth} ${outerHeight}`);
   diagram.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  diagram.style.width = `${displayWidth}px`;
-  diagram.style.height = `${displayHeight}px`;
+  diagram.style.width = `${available.width}px`;
+  diagram.style.height = `${available.height}px`;
   diagramBg.setAttribute("width", String(outerWidth));
   diagramBg.setAttribute("height", String(outerHeight));
-  diagramWrap.style.width = `${displayWidth}px`;
-  diagramWrap.style.height = `${displayHeight}px`;
+  diagramWrap.style.width = `${available.width}px`;
+  diagramWrap.style.height = `${available.height}px`;
 }
 
 function setStaticLayerVisible(visible) {

@@ -33,4 +33,3 @@ a otevři **http://localhost:3470**.
 - **Nový obdélník** — vygeneruje náhodný šedý obdélník (1–6 dm × 1–3 dm)
 - **Volná plocha** — režim bez obdélníku, dlaždice lze volně pokládat
 - Zásobník dlaždic pod tlačítky — přetáhni zelenou (1 dm²), modrou (1 cm²) nebo červenou (1 mm²) dlaždici na plochu
-- Šedý obdélník lze přetahovat za jeho plochu
